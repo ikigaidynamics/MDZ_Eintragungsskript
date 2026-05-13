@@ -4,31 +4,11 @@ from collections import Counter
 import json
 from datetime import datetime
 import io
-import base64
 
-import os
+st.set_page_config(page_title="MDZ Teilnehmer-Auswertung", layout="wide")
 
-_APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-st.set_page_config(
-    page_title="MDZ Teilnehmer-Auswertung",
-    page_icon=os.path.join(_APP_DIR, "public", "MD_Icon_bg.jpg"),
-    layout="wide",
-)
-
-with open(os.path.join(_APP_DIR, "public", "MittelstandDigital_Single.png"), "rb") as _f:
-    _md_logo_b64 = base64.b64encode(_f.read()).decode()
-with open(os.path.join(_APP_DIR, "public", "bmwe.png"), "rb") as _f:
-    _bmwe_logo_b64 = base64.b64encode(_f.read()).decode()
-
-st.markdown(f"""
-<div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0 1rem 0;">
-    <img src="data:image/png;base64,{_md_logo_b64}" style="height: 80px;">
-    <img src="data:image/png;base64,{_bmwe_logo_b64}" style="height: 80px;">
-</div>
-""", unsafe_allow_html=True)
-st.title("Intelligente Teilnehmendenerfassung")
-st.write("Excel-Listen hochladen, Teilnehmende prüfen, Zahlen automatisch berechnen.")
+st.title("📊 MDZ Teilnehmer-Auswertung")
+st.write("CSV hochladen, Teilnehmende markieren, Zahlen automatisch berechnen.")
 
 # ==============================
 # BEDIENUNGSANLEITUNG
@@ -37,38 +17,27 @@ st.write("Excel-Listen hochladen, Teilnehmende prüfen, Zahlen automatisch berec
 with st.expander("Bedienungsanleitung", expanded=False):
     st.markdown("""
     ### Wie verwenden Sie diese Anwendung?
-
-    **Vorbereitung im Portal:**
-    - Öffnen Sie [my.digitalzentrum-spreeland.de](https://my.digitalzentrum-spreeland.de/) und navigieren Sie zur Veranstaltung
-    - Markieren Sie bei jeder Person den Teilnahmestatus (grünes Männchen = teilgenommen, rotes Männchen = nicht teilgenommen), damit der Status beim Export wirksam wird
-    """)
-    st.image(
-        os.path.join(_APP_DIR, "public", "Anleitung_MDZPortal.jpg"),
-        caption="Teilnehmer-Ansicht im MDZ-Portal: Grünes Männchen = teilgenommen, rotes Männchen = nicht teilgenommen. Filter und Export oben rechts.",
-    )
-    st.markdown("""
-    **1. Excel-Listen aus dem Portal exportieren:**
-    - Setzen Sie den Filter **Teilnahme → Teilgenommen** und exportieren Sie die Liste als Excel-Datei
-    - Setzen Sie den Filter **Teilnahme → Nicht Teilgenommen** und exportieren Sie die zweite Liste als Excel-Datei
-
-    **2. Listen hochladen:**
-    - Wählen Sie den Upload-Modus **"Zwei Listen"**
-    - Laden Sie die Excel-Datei der Teilgenommenen links hoch
-    - Laden Sie die Excel-Datei der Nicht-Teilgenommenen rechts hoch
-    - Die Listen werden automatisch zusammengeführt und der Teilnahmestatus korrekt gesetzt
-    - Alternativ: Eine einzelne CSV-/Excel-Datei mit allen Anmeldungen hochladen
-
-    **3. Daten prüfen und bearbeiten:**
-    - **Hat teilgenommen**: Häkchen prüfen/korrigieren für tatsächliche Teilnehmer
-    - **Kategorie**: Unternehmen, Kammer, Verband, Hochschule etc. zuordnen
-    - **Unternehmen**: Namen bei Bedarf anpassen (exakt gleiche Schreibweise für selbes Unternehmen!)
-    - Nach allen Änderungen **"Änderungen anwenden"** klicken
-
+    
+    **1. CSV-Datei vorbereiten:**
+    - Spalte "Unternehmen" (erforderlich)
+    - Spalte "Firmengröße" (optional, für Größenauswertung)
+    - Eine Zeile = eine Person
+    
+    **2. Datei hochladen:**
+    - Neue Rohdaten: Standard-Einstellungen werden angewandt
+    - Bereits bearbeitete Datei: Ihre Markierungen werden wiederhergestellt
+    
+    **3. Daten bearbeiten:**
+    - **Hat teilgenommen**: Nur ankreuzen für tatsächliche Teilnehmer
+    - **Ist Unternehmen**: Ankreuzen für Unternehmen, nicht ankreuzen für andere Institutionen
+    - **Institutionstyp**: Nur auswählen wenn NICHT Unternehmen (Kammer, Verband, etc.)
+    - **WICHTIG**: Institutionen mit mehreren Vertretern müssen **exakt gleich benannt** sein!
+    
     **4. Qualitätskontrolle:**
-    - Prüfen Sie Unternehmensnamen auf konsistente Schreibweise
+    - Prüfen Sie Unternehmensnamen auf Konsistenz
     - Achten Sie auf korrekte Kategorisierung (Unternehmen vs. Institution)
     - Kontrollieren Sie die Teilnahme-Markierungen
-
+    
     **5. Auswertung & Export:**
     - Automatische Berechnung aller Kennzahlen
     - Export als CSV, Excel oder JSON
@@ -78,107 +47,56 @@ with st.expander("Bedienungsanleitung", expanded=False):
 st.write("---")
 
 # ==============================
-# DATEN-UPLOAD
+# CSV UPLOAD
 # ==============================
 
-
-def _read_file(f):
-    """Liest CSV oder Excel Datei und gibt DataFrame zurück."""
-    if f.name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(f), f"Excel: {f.name}"
-    encodings = ["utf-8", "latin-1", "cp1252", "iso-8859-1"]
-    separators = [";", ",", "\t"]
-    for enc in encodings:
-        for sep in separators:
-            try:
-                f.seek(0)
-                result = pd.read_csv(
-                    f, sep=sep, encoding=enc,
-                    on_bad_lines="skip", skipinitialspace=True,
-                )
-                if len(result) > 0 and len(result.columns) >= 2:
-                    return result, f"CSV ({enc}, '{sep}')"
-            except Exception:
-                continue
-    return None, None
-
-
-upload_mode = st.radio(
-    "Upload-Modus:",
-    ["Einzelne Datei (CSV/Excel)", "Zwei Listen (Teilgenommen + Nicht teilgenommen)"],
-    horizontal=True,
+uploaded_file = st.file_uploader(
+    "CSV-Datei hochladen (Rohdaten oder bereits bearbeitete Datei)",
+    type=["csv"],
+    help="Sie können sowohl neue Rohdaten als auch bereits bearbeitete CSV-Dateien (mit gespeicherten Einstellungen) hochladen.",
 )
 
+if uploaded_file is None:
+    st.info("Bitte lade eine CSV-Datei hoch.")
+    st.stop()
+
+# CSV lesen - verschiedene Encodings und Separatoren versuchen
+encodings = ["utf-8", "latin-1", "cp1252", "iso-8859-1"]
+separators = [";", ",", "\t"]
 df = None
 successful_config = None
 
-if upload_mode == "Einzelne Datei (CSV/Excel)":
-    uploaded_file = st.file_uploader(
-        "CSV- oder Excel-Datei hochladen (Rohdaten oder bereits bearbeitete Datei)",
-        type=["csv", "xlsx", "xls"],
-        help="Sie können sowohl neue Rohdaten als auch bereits bearbeitete Dateien hochladen.",
-        key="single_upload",
-    )
-
-    if uploaded_file is None:
-        st.info("Bitte laden Sie eine Datei hoch.")
-        st.stop()
-
-    df, successful_config = _read_file(uploaded_file)
-
-else:  # Zwei Listen
-    st.write("Laden Sie zwei separate Listen hoch:")
-    col_up1, col_up2 = st.columns(2)
-    with col_up1:
-        file_teil = st.file_uploader(
-            "Liste: Teilgenommen",
-            type=["xlsx", "xls", "csv"],
-            key="upload_teilgenommen",
-            help="Personen die tatsaechlich teilgenommen haben",
-        )
-    with col_up2:
-        file_nicht = st.file_uploader(
-            "Liste: Nicht teilgenommen",
-            type=["xlsx", "xls", "csv"],
-            key="upload_nicht_teilgenommen",
-            help="Personen die nur angemeldet waren",
-        )
-
-    if file_teil is None and file_nicht is None:
-        st.info("Bitte laden Sie mindestens eine Liste hoch.")
-        st.stop()
-
-    parts = []
-    if file_teil is not None:
-        df_teil, _ = _read_file(file_teil)
-        if df_teil is not None and len(df_teil) > 0:
-            df_teil["teilgenommen"] = True
-            parts.append(df_teil)
-            st.success(f"Teilgenommen: {len(df_teil)} Eintraege aus '{file_teil.name}'")
-        else:
-            st.error(f"Konnte '{file_teil.name}' nicht lesen.")
-
-    if file_nicht is not None:
-        df_nicht, _ = _read_file(file_nicht)
-        if df_nicht is not None and len(df_nicht) > 0:
-            df_nicht["teilgenommen"] = False
-            parts.append(df_nicht)
-            st.success(f"Nicht teilgenommen: {len(df_nicht)} Eintraege aus '{file_nicht.name}'")
-        else:
-            st.error(f"Konnte '{file_nicht.name}' nicht lesen.")
-
-    if not parts:
-        st.error("Keine Daten geladen.")
-        st.stop()
-
-    df = pd.concat(parts, ignore_index=True)
-    successful_config = f"Zusammengefuehrt: {len(df)} Eintraege aus {len(parts)} Datei(en)"
+for encoding in encodings:
+    for sep in separators:
+        try:
+            # Zurück zum Anfang der Datei
+            uploaded_file.seek(0)
+            # Versuche mit verschiedenen Einstellungen
+            df = pd.read_csv(
+                uploaded_file,
+                sep=sep,
+                encoding=encoding,
+                on_bad_lines="skip",  # Überspringe problematische Zeilen
+                skipinitialspace=True,  # Entferne Leerzeichen nach Separator
+            )
+            # Prüfe ob das Ergebnis sinnvoll ist (mindestens 1 Zeile und 3 Spalten)
+            if len(df) > 0 and len(df.columns) >= 3:
+                successful_config = f"Encoding: {encoding}, Separator: '{sep}'"
+                break
+        except Exception as e:
+            continue
+    if df is not None and len(df) > 0:
+        break
 
 if df is None or len(df) == 0:
-    st.error("Konnte Datei(en) nicht lesen. Bitte pruefen Sie das Dateiformat.")
+    st.error("Konnte CSV-Datei nicht lesen. Bitte prüfe das Dateiformat.")
+    st.write("**Mögliche Probleme:**")
+    st.write("- Falsches Encoding (UTF-8, Latin-1, CP1252 probiert)")
+    st.write("- Falscher Separator (Semikolon, Komma, Tab probiert)")
+    st.write("- Datei ist leer oder beschädigt")
     st.stop()
 else:
-    st.success(f"Erfolgreich eingelesen ({successful_config})")
+    st.success(f"✅ CSV erfolgreich eingelesen ({successful_config})")
 
 
 # Spalten normalisieren - alle möglichen Varianten von "Firmengröße"
@@ -199,10 +117,10 @@ def normalize_columns(columns):
 df.columns = normalize_columns(df.columns)
 
 # Leere Spalten entfernen (entstehen durch abschließende Separatoren)
-df = df.dropna(axis=1, how='all')
+df = df.dropna(axis=1, how="all")
 # Auch Spalten mit nur leerem String entfernen
 for col in df.columns:
-    if df[col].dtype == 'object' and df[col].str.strip().eq('').all():
+    if df[col].dtype == "object" and df[col].str.strip().eq("").all():
         df = df.drop(columns=[col])
 
 # Spalten werden nicht mehr angezeigt
@@ -224,15 +142,10 @@ kategorie_optionen = [
 ]
 
 # Prüfen, ob es sich um eine bereits bearbeitete Datei handelt
-# Im Dual-Upload-Modus wird "teilgenommen" vom Programm gesetzt, nicht vom Nutzer -
-# das zaehlt nicht als "bereits bearbeitete Datei".
-_is_dual_upload = upload_mode != "Einzelne Datei (CSV/Excel)"
-has_checkbox_columns = "Kategorie" in df.columns or (
-    "teilgenommen" in df.columns and not _is_dual_upload
-)
+has_checkbox_columns = "Kategorie" in df.columns or "teilgenommen" in df.columns
 if has_checkbox_columns:
     st.success("✅ Bereits bearbeitete Datei erkannt - Einstellungen werden geladen!")
-elif not _is_dual_upload:
+else:
     st.info("ℹ️ Rohdatei erkannt - Standard-Einstellungen werden angewandt.")
 
 # Erwartete Spalten - flexibler prüfen
@@ -249,14 +162,19 @@ if "Unternehmen" in df.columns:
 else:
     # Suche nach anderen möglichen Unternehmensspalten
     for col in df.columns:
-        if any(keyword in col.lower() for keyword in ["unternehmen", "firma", "betrieb", "organisation"]):
+        if any(
+            keyword in col.lower()
+            for keyword in ["unternehmen", "firma", "betrieb", "organisation"]
+        ):
             unternehmen_spalte = col
             # Spalte umbenennen für einheitliche Verarbeitung
             df = df.rename(columns={col: "Unternehmen"})
             break
 
 if unternehmen_spalte is None:
-    st.error("Keine Unternehmensspalte gefunden! Gesuchte Spalten: 'Unternehmen', 'Firma', 'Betrieb', 'Organisation'")
+    st.error(
+        "Keine Unternehmensspalte gefunden! Gesuchte Spalten: 'Unternehmen', 'Firma', 'Betrieb', 'Organisation'"
+    )
     st.stop()
 
 if not firmengröße_found:
@@ -269,34 +187,34 @@ df["Unternehmen"] = df["Unternehmen"].astype(str).str.strip()
 original_length = len(df)
 
 # Falls Unternehmensspalte komplett leer ist (wie in der Demo-Datei), verwende Zielgruppe als Platzhalter
-empty_companies_mask = df["Unternehmen"].isna() | (df["Unternehmen"] == "") | (df["Unternehmen"] == "nan")
+empty_companies_mask = (
+    df["Unternehmen"].isna() | (df["Unternehmen"] == "") | (df["Unternehmen"] == "nan")
+)
 empty_companies_count = empty_companies_mask.sum()
 
 if empty_companies_count > 0:
     if "Zielgruppe" in df.columns:
         # Verwende Zielgruppe + laufende Nummer als Platzhalter-Unternehmen
         for idx, row in df[empty_companies_mask].iterrows():
-            zielgruppe = str(row["Zielgruppe"]) if pd.notna(row["Zielgruppe"]) else "Unbekannt"
-            df.at[idx, "Unternehmen"] = f"{zielgruppe}_Firma_{idx+1}"
-        st.info(f"ℹ️ {empty_companies_count} leere Unternehmenswerte wurden durch Platzhalter basierend auf der Zielgruppe ersetzt.")
+            zielgruppe = (
+                str(row["Zielgruppe"]) if pd.notna(row["Zielgruppe"]) else "Unbekannt"
+            )
+            df.at[idx, "Unternehmen"] = f"{zielgruppe}_Firma_{idx + 1}"
+        st.info(
+            f"ℹ️ {empty_companies_count} leere Unternehmenswerte wurden durch Platzhalter basierend auf der Zielgruppe ersetzt."
+        )
     else:
         # Fallback: Verwende generische Platzhalter
         for idx, row in df[empty_companies_mask].iterrows():
-            df.at[idx, "Unternehmen"] = f"Unternehmen_{idx+1}"
-        st.info(f"ℹ️ {empty_companies_count} leere Unternehmenswerte wurden durch generische Platzhalter ersetzt.")
+            df.at[idx, "Unternehmen"] = f"Unternehmen_{idx + 1}"
+        st.info(
+            f"ℹ️ {empty_companies_count} leere Unternehmenswerte wurden durch generische Platzhalter ersetzt."
+        )
 
 # Final check: Stelle sicher, dass wir noch Daten haben
 if len(df) == 0:
     st.error("Nach der Datenbereinigung sind keine Datensätze mehr vorhanden!")
     st.stop()
-
-# Erkennung ob neue Datei hochgeladen wurde -> Session State zuruecksetzen
-_data_fingerprint = hash(df.head(5).to_csv() + str(len(df)))
-if "last_data_fingerprint" not in st.session_state or st.session_state.last_data_fingerprint != _data_fingerprint:
-    st.session_state.last_data_fingerprint = _data_fingerprint
-    for _key in ["confirmed_df", "saved_edits", "main_data_editor", "rows_to_delete"]:
-        if _key in st.session_state:
-            del st.session_state[_key]
 
 # Debug info wird ans Ende verschoben
 
@@ -314,15 +232,6 @@ def process_edited_data(edited_df):
     """Verarbeitet die bearbeiteten Daten und normalisiert Unternehmensnamen"""
     processed_df = edited_df.copy()
     processed_df["Unternehmen"] = processed_df["Unternehmen"].astype(str).str.strip()
-    
-    # Stelle sicher, dass teilgenommen ein Boolean ist
-    if "teilgenommen" in processed_df.columns:
-        # Konvertiere verschiedene Formate zu Boolean
-        processed_df["teilgenommen"] = processed_df["teilgenommen"].apply(
-            lambda x: bool(x) if isinstance(x, (bool, int)) else 
-                     str(x).lower() in ["true", "1", "yes", "ja", "wahr"] if pd.notna(x) else False
-        )
-    
     return processed_df
 
 
@@ -343,14 +252,19 @@ else:
 
 # Kategorie-Spalte initialisieren
 if "Kategorie" not in df.columns:
+
     def intelligent_category_detection(row):
         """Intelligente Erkennung der Kategorie basierend auf Unternehmen und Zielgruppe"""
         unternehmen = str(row.get("Unternehmen", "")).lower().strip()
         zielgruppe = str(row.get("Zielgruppe", "")).lower().strip()
         firmengroesse = str(row.get("Firmengröße", "")).lower().strip()
-        
+
         # GmbH hat Vorrang - bleibt bei Firmengröße-basierter Kategorisierung
-        if "gmbh" in unternehmen or "gmbh & co" in unternehmen or "gmbh&co" in unternehmen:
+        if (
+            "gmbh" in unternehmen
+            or "gmbh & co" in unternehmen
+            or "gmbh&co" in unternehmen
+        ):
             # Verwende Firmengröße-basierte Kategorisierung für GmbHs
             if "Firmengröße" in df.columns and pd.notna(row.get("Firmengröße")):
                 groesse_str = firmengroesse
@@ -368,35 +282,80 @@ if "Kategorie" not in df.columns:
                     return "Unternehmen 1-9 Mitarbeiter"
             else:
                 return "Unternehmen 1-9 Mitarbeiter"
-        
+
         # Bildungseinrichtungen erkennen (aber nicht wenn GmbH)
         bildung_keywords = [
-            "uni", "universität", "university", "hochschule", "institut", "fachhochschule", 
-            "fh", "th", "technische hochschule", "btü", "btu", "btu cottbus", "btu cottbus-senftenberg",
-            "btu cottbus senftenberg", "chesco", "akademie", "college", "school"
+            "uni",
+            "universität",
+            "university",
+            "hochschule",
+            "institut",
+            "fachhochschule",
+            "fh",
+            "th",
+            "technische hochschule",
+            "btü",
+            "btu",
+            "btu cottbus",
+            "btu cottbus-senftenberg",
+            "btu cottbus senftenberg",
+            "chesco",
+            "akademie",
+            "college",
+            "school",
         ]
-        if any(keyword in unternehmen for keyword in bildung_keywords) or "bildung" in zielgruppe or "hochschule" in zielgruppe:
+        if (
+            any(keyword in unternehmen for keyword in bildung_keywords)
+            or "bildung" in zielgruppe
+            or "hochschule" in zielgruppe
+        ):
             return "Hochschule/Bildungseinrichtung"
-        
+
         # Verbände/Vereine erkennen
-        verband_keywords = ["e.v.", "e.v", "e. v.", "e. v", "eingetragener verein", "verband", "verein", "bund", "gesellschaft e.v", "förderverein", "innung"]
-        if any(keyword in unternehmen for keyword in verband_keywords) or "verband" in zielgruppe or "verein" in zielgruppe:
+        verband_keywords = [
+            "e.v.",
+            "e.v",
+            "ev",
+            "eingetragener verein",
+            "verband",
+            "verein",
+            "bund",
+            "gesellschaft e.v",
+            "förderverein",
+        ]
+        if (
+            any(keyword in unternehmen for keyword in verband_keywords)
+            or "verband" in zielgruppe
+            or "verein" in zielgruppe
+        ):
             return "Verband/Verein"
-        
+
         # Kammern erkennen
-        if "kammer" in unternehmen or "ihk" in unternehmen or "handwerkskammer" in unternehmen:
+        if (
+            "kammer" in unternehmen
+            or "ihk" in unternehmen
+            or "handwerkskammer" in unternehmen
+        ):
             return "Kammer"
-        
+
         # Wirtschaftsförderung erkennen
-        if "wirtschaftsförderung" in unternehmen or "wirtschaftsfoerderung" in unternehmen:
+        if (
+            "wirtschaftsförderung" in unternehmen
+            or "wirtschaftsfoerderung" in unternehmen
+        ):
             return "Wirtschaftsförderung"
-        
+
         # Mittelstand Digital erkennen
-        mdz_keywords = ["mdz", "mittelstand-digitalzentrum", "mittelstand digitalzentrum"]
-        if (any(keyword in unternehmen for keyword in mdz_keywords) or 
-            ("mittelstand" in unternehmen and "digital" in unternehmen)):
+        mdz_keywords = [
+            "mdz",
+            "mittelstand-digitalzentrum",
+            "mittelstand digitalzentrum",
+        ]
+        if any(keyword in unternehmen for keyword in mdz_keywords) or (
+            "mittelstand" in unternehmen and "digital" in unternehmen
+        ):
             return "Mittelstand-Digital"
-        
+
         # Sonst: Unternehmen basierend auf Firmengröße
         if "Firmengröße" in df.columns and pd.notna(row.get("Firmengröße")):
             groesse_str = firmengroesse
@@ -414,7 +373,7 @@ if "Kategorie" not in df.columns:
                 return "Unternehmen 1-9 Mitarbeiter"
         else:
             return "Unternehmen 1-9 Mitarbeiter"  # Default
-    
+
     df["Kategorie"] = df.apply(intelligent_category_detection, axis=1)
 
 # Legacy-Spalten entfernen falls vorhanden (für Rückwärtskompatibilität)
@@ -432,15 +391,20 @@ for col in legacy_columns:
     if col in df.columns:
         df = df.drop(columns=[col])
 
-# Session State für zu löschende Zeilen
+# Session State für zu löschende Zeilen und DataFrame
 if "rows_to_delete" not in st.session_state:
     st.session_state.rows_to_delete = []
 
-# Session State für persistente Bearbeitungen (überleben Sortieränderungen)
-if "saved_edits" not in st.session_state:
-    st.session_state.saved_edits = {}  # {row_id: {col: value, ...}}
-if "last_sort_option" not in st.session_state:
-    st.session_state.last_sort_option = "Ursprüngliche Reihenfolge"
+# Session State für Upload-Hash um neue Dateien zu erkennen
+current_file_hash = hash(str(df.values.tobytes())) if len(df) > 0 else 0
+if (
+    "file_hash" not in st.session_state
+    or st.session_state.file_hash != current_file_hash
+):
+    # Neue Datei - setze Session State zurück
+    st.session_state.file_hash = current_file_hash
+    if "data_editor" in st.session_state:
+        del st.session_state["data_editor"]
 
 # Zeilen-Auswahl für Löschung
 st.write("**Zeile zum Löschen auswählen:**")
@@ -467,36 +431,12 @@ if len(df) > 0:
             st.session_state.rows_to_delete = []
             st.success("Alle Löschungen zurückgesetzt!")
 
-# Reset-Button für alle Änderungen
-if st.button("🔄 Alle Änderungen zurücksetzen", type="secondary"):
-    st.session_state.rows_to_delete = []
-    st.session_state.saved_edits = {}
-    st.session_state.last_sort_option = "Ursprüngliche Reihenfolge"
-    for _reset_key in ["main_data_editor", "confirmed_df"]:
-        if _reset_key in st.session_state:
-            del st.session_state[_reset_key]
-    st.success("Alle Änderungen wurden zurückgesetzt!")
-    st.rerun()
-
-
-# Verwende ursprünglichen DataFrame und filtere gelöschte Zeilen
+# DataFrame nach Löschungen filtern
 working_df = df.drop(index=st.session_state.rows_to_delete).reset_index(drop=True)
-
-# Stabile Zeilen-ID hinzufügen (überlebt Sortieränderungen)
-working_df["_row_id"] = range(len(working_df))
-
-# Gespeicherte Bearbeitungen auf working_df anwenden
-editable_cols = ["teilgenommen", "Kategorie", "Unternehmen"]
-for row_id, edits in st.session_state.saved_edits.items():
-    if row_id < len(working_df):
-        for col, val in edits.items():
-            if col in working_df.columns:
-                working_df.at[row_id, col] = val
 
 # Zeilennummer als erste Spalte hinzufügen
 working_df_with_index = working_df.copy()
 working_df_with_index.insert(0, "Nr.", range(1, len(working_df_with_index) + 1))
-
 
 if len(st.session_state.rows_to_delete) > 0:
     st.warning(
@@ -505,13 +445,19 @@ if len(st.session_state.rows_to_delete) > 0:
 
 # Warnung für Namenskonsistenz
 st.info(
-    "**Tipp**: Achten Sie ggbf. darauf, dass Unternehmen/Institutionen mit mehreren Vertretern exakt gleich benannt sind (z.B. 'BTU Cottbus-Senftenberg' und nicht 'BTU Cottbus Senftenberg')."
+    "**Tipp**: Achten Sie darauf, dass Unternehmen/Institutionen mit mehreren Vertretern exakt gleich benannt sind (z.B. 'EMIS GmbH' nicht 'EMIS' und 'EMIS GmbH')."
 )
 
 st.write("**Daten bearbeiten:**")
 
 # Sortier-Option
-sort_options = ["Ursprüngliche Reihenfolge", "Unternehmen (A-Z)", "Unternehmen (Z-A)", "Kategorie (A-Z)", "Kategorie (Z-A)"]
+sort_options = [
+    "Ursprüngliche Reihenfolge",
+    "Unternehmen (A-Z)",
+    "Unternehmen (Z-A)",
+    "Kategorie (A-Z)",
+    "Kategorie (Z-A)",
+]
 if "Firmengröße" in working_df_with_index.columns:
     sort_options.extend(["Firmengröße (Klein → Groß)", "Firmengröße (Groß → Klein)"])
 
@@ -519,18 +465,7 @@ sort_option = st.selectbox(
     "Tabelle sortieren nach:",
     options=sort_options,
     help="Wählen Sie, wie die Tabelle sortiert werden soll",
-    key="sort_selector",
 )
-
-# Sortieränderung erkennen: data_editor zurücksetzen
-# Hinweis: Bearbeitungen wurden bereits im vorherigen Run durch den Post-Editor-Save
-# (nach dem data_editor) korrekt in saved_edits gespeichert. Hier muss nur der
-# Widget-State gelöscht werden, damit der Editor mit der neuen Sortierung neu startet.
-if sort_option != st.session_state.last_sort_option:
-    if "main_data_editor" in st.session_state:
-        del st.session_state["main_data_editor"]
-    st.session_state.last_sort_option = sort_option
-    st.rerun()
 
 # Tabelle sortieren
 if sort_option == "Unternehmen (A-Z)":
@@ -624,7 +559,6 @@ column_config = {
     "Unternehmen": st.column_config.TextColumn(
         "Unternehmen", help="Unternehmen/Institution bearbeitbar"
     ),
-    "_row_id": None,  # Spalte im Editor ausblenden
 }
 
 
@@ -650,66 +584,95 @@ def get_firmengroesse_from_kategorie(kategorie):
         return None
 
 
-@st.fragment
-def _render_data_editor():
-    """Editor-Fragment: Zellaenderungen loesen nur Fragment-Rerun aus (kein Scroll-Reset)."""
-    edited_df_with_index = st.data_editor(
-        working_df_with_index,
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config=column_config,
-        disabled=["Nr.", "_row_id"]
-        + (["Firmengröße"] if "Firmengröße" in working_df_with_index.columns else []),
-        key="main_data_editor"
-    )
+edited_df_with_index = st.data_editor(
+    working_df_with_index,
+    use_container_width=True,
+    num_rows="dynamic",
+    column_config=column_config,
+    disabled=["Nr."]
+    + (["Firmengröße"] if "Firmengröße" in working_df_with_index.columns else []),
+    key="data_editor",
+)
 
-    # Bearbeitungen aus data_editor in saved_edits sichern (für Persistenz über Sortierungen hinweg)
-    if "main_data_editor" in st.session_state:
-        editor_state = st.session_state["main_data_editor"]
-        edited_rows = editor_state.get("edited_rows", {})
-        for row_idx_str, changes in edited_rows.items():
-            row_idx = int(row_idx_str)
-            if row_idx < len(edited_df_with_index):
-                row_id = int(edited_df_with_index.iloc[row_idx]["_row_id"])
-                if row_id not in st.session_state.saved_edits:
-                    st.session_state.saved_edits[row_id] = {}
-                st.session_state.saved_edits[row_id].update(changes)
+# Zeilennummer wieder entfernen für weitere Verarbeitung
+edited_df = edited_df_with_index.drop(columns=["Nr."])
 
-    # Zeilennummer und _row_id entfernen für weitere Verarbeitung
-    edited_df = edited_df_with_index.drop(columns=["Nr.", "_row_id"])
 
-    # ==============================
-    # ÄNDERUNGEN ANWENDEN
-    # ==============================
+# Dynamische Kategorie-Aktualisierung bei geänderten Unternehmensnamen
+def update_category_if_needed(row):
+    """Aktualisiert die Kategorie wenn der Unternehmensname geändert wurde"""
+    unternehmen = str(row.get("Unternehmen", "")).lower().strip()
+    aktuelle_kategorie = row.get("Kategorie", "")
 
-    st.write("---")
-    _apply_clicked = st.button(
-        "Änderungen anwenden", type="primary",
-        help="Klicken Sie hier, um Ihre Bearbeitungen in die Auswertung zu uebernehmen.",
-    )
+    # GmbH hat Vorrang - bleibt bei Firmengröße-basierter Kategorisierung
+    if "gmbh" in unternehmen or "gmbh & co" in unternehmen or "gmbh&co" in unternehmen:
+        # Behalte aktuelle Kategorie für GmbHs (meist schon korrekt nach Firmengröße)
+        return aktuelle_kategorie
 
-    if _apply_clicked:
-        st.session_state.confirmed_df = edited_df.copy()
-        st.session_state._changes_applied = True
-        st.rerun()  # Voller Page-Rerun um Auswertung zu aktualisieren
+    # Nur für Unternehmen, die gerade geändert wurden oder noch Default-Kategorien haben
+    bildung_keywords = [
+        "uni",
+        "universität",
+        "university",
+        "hochschule",
+        "institut",
+        "fachhochschule",
+        "fh",
+        "th",
+        "technische hochschule",
+        "btü",
+        "btu",
+        "btu cottbus",
+        "btu cottbus-senftenberg",
+        "btu cottbus senftenberg",
+        "chesco",
+        "akademie",
+        "college",
+        "school",
+    ]
+    verband_keywords = [
+        "e.v.",
+        "e.v",
+        "ev",
+        "eingetragener verein",
+        "verband",
+        "verein",
+        "bund",
+        "gesellschaft e.v",
+        "förderverein",
+    ]
 
-    # Beim ersten Laden automatisch bestaetigen
-    if "confirmed_df" not in st.session_state:
-        st.session_state.confirmed_df = edited_df.copy()
+    if any(keyword in unternehmen for keyword in bildung_keywords):
+        return "Hochschule/Bildungseinrichtung"
+    elif any(keyword in unternehmen for keyword in verband_keywords):
+        return "Verband/Verein"
+    elif "kammer" in unternehmen or "ihk" in unternehmen:
+        return "Kammer"
+    elif (
+        "wirtschaftsförderung" in unternehmen or "wirtschaftsfoerderung" in unternehmen
+    ):
+        return "Wirtschaftsförderung"
+    elif (
+        "mdz" in unternehmen
+        or "mittelstand-digitalzentrum" in unternehmen
+        or "mittelstand digitalzentrum" in unternehmen
+        or ("mittelstand" in unternehmen and "digital" in unternehmen)
+    ):
+        return "Mittelstand-Digital"
+    else:
+        # Behalte die aktuelle Kategorie bei, wenn keine Schlüsselwörter gefunden
+        return aktuelle_kategorie
 
-_render_data_editor()
 
-# Erfolgsmeldung nach vollem Page-Rerun anzeigen
-if st.session_state.pop("_changes_applied", False):
-    st.success("Änderungen wurden angewandt!")
+# Kategorie aktualisieren falls nötig
+edited_df["Kategorie"] = edited_df.apply(update_category_if_needed, axis=1)
 
 # ==============================
 # FILTER
 # ==============================
 
-# Bestaetigte Daten fuer Auswertung verwenden
-processed_df = process_edited_data(st.session_state.confirmed_df)
-
+# Bearbeitete Daten verarbeiten
+processed_df = process_edited_data(edited_df)
 
 teilgenommen_df = processed_df[processed_df["teilgenommen"]]
 angemeldet_df = processed_df[~processed_df["teilgenommen"]]
@@ -841,43 +804,45 @@ def calculate_visitor_statistics():
     """Berechnet Besucherstatistiken - Unternehmen nach Größe + Institutionen"""
     stats = []
 
-    # Definierte Reihenfolge und Anzeigenamen für Besucherkennzahlen
+    # Definierte Reihenfolge für Besucherkennzahlen
     ordered_categories = [
-        ("Unternehmen 1-9 Mitarbeiter",       "Kleinstunternehmen (1-9 Mitarbeiter)"),
-        ("Unternehmen 10-49 Mitarbeiter",      "Kleine Unternehmen (10-49 Mitarbeiter)"),
-        ("Unternehmen 50-249 Mitarbeiter",     "Mittlere Unternehmen (50-249 Mitarbeiter)"),
-        ("Unternehmen bis 500 Mitarbeiter",    "Gr\u00f6\u00dfere Unternehmen (250-500 Mitarbeiter)"),
-        ("Kammer",                             "Kammer"),
-        ("Verband/Verein",                     "Verband/Verein"),
-        ("Wirtschaftsf\u00f6rderung",          "Wirtschaftsf\u00f6rderung"),
-        ("Unternehmen ueber 500 Mitarbeiter",  "Gro\u00dfunternehmen (500+ Mitarbeiter)"),
-        ("Hochschule/Bildungseinrichtung",     "Hochschulen/Bildungseinrichtungen"),
-        ("Mittelstand-Digital",                "Mittelstand-Digital"),
-        ("F\u00f6rderinitiative",              "F\u00f6rderinitiative"),
+        "Unternehmen 1-9 Mitarbeiter",  # Kleinstunternehmen (1 - 9)
+        "Unternehmen 10-49 Mitarbeiter",  # Kleine Unternehmen (10 - 49)
+        "Unternehmen 50-249 Mitarbeiter",  # Mittlere Unternehmen (50 - 249)
+        "Unternehmen bis 500 Mitarbeiter",  # Größere Unternehmen (250 - 500)
+        "Kammer",  # Kammer
+        "Verband/Verein",  # Verband/Verein
+        "Wirtschaftsförderung",  # Wirtschaftsförderung
+        "Unternehmen ueber 500 Mitarbeiter",  # Großunternehmen (> 500)
+        "Hochschule/Bildungseinrichtung",  # Hochschulen/Bildungseinrichtung
+        "Mittelstand-Digital",  # Mittelstand-Digital
+        "Förderinitiative",  # Förderinitiative
+        "Unklar",  # Unklar (falls vorhanden)
     ]
 
-    # Kategorien in definierter Reihenfolge durchgehen - ALLE anzeigen, auch bei 0
-    for kategorie, display_name in ordered_categories:
+    # Kategorien in definierter Reihenfolge durchgehen
+    for kategorie in ordered_categories:
         category_df = processed_df[processed_df["Kategorie"] == kategorie]
 
-        angemeldet_personen = len(category_df)
-        teilgenommen_personen = len(category_df[category_df["teilgenommen"]]) if len(category_df) > 0 else 0
-        angemeldet_organisationen = category_df["Unternehmen"].nunique() if len(category_df) > 0 else 0
-        teilgenommen_organisationen = (
-            category_df[category_df["teilgenommen"]]["Unternehmen"].nunique()
-            if len(category_df) > 0 and len(category_df[category_df["teilgenommen"]]) > 0
-            else 0
-        )
+        if len(category_df) > 0:  # Nur anzeigen wenn Daten vorhanden
+            angemeldet_personen = len(category_df)
+            teilgenommen_personen = len(category_df[category_df["teilgenommen"]])
+            angemeldet_organisationen = category_df["Unternehmen"].nunique()
+            teilgenommen_organisationen = (
+                category_df[category_df["teilgenommen"]]["Unternehmen"].nunique()
+                if len(category_df[category_df["teilgenommen"]]) > 0
+                else 0
+            )
 
-        stats.append(
-            [
-                display_name,
-                angemeldet_personen,
-                teilgenommen_personen,
-                angemeldet_organisationen,
-                teilgenommen_organisationen,
-            ]
-        )
+            stats.append(
+                [
+                    kategorie,
+                    angemeldet_personen,
+                    teilgenommen_personen,
+                    angemeldet_organisationen,
+                    teilgenommen_organisationen,
+                ]
+            )
 
     return stats
 
@@ -902,8 +867,8 @@ stats_df = pd.DataFrame(
     ],
 )
 
-# Tabelle anzeigen (Höhe so, dass alle 11 Kategorien ohne Scrollen sichtbar sind)
-st.dataframe(stats_df, use_container_width=True, hide_index=True, height=422)
+# Tabelle anzeigen
+st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
 # Aggregierte Zahlen berechnen und anzeigen
 total_angemeldet_personen = stats_df["Anzahl angemeldeter Personen"].sum()
@@ -1005,124 +970,99 @@ if (
 st.write("---")
 st.subheader("🏛️ Detaillierte Aufschlüsselung nach Kategorien")
 
-# Tabs für bessere Übersicht
-tab1, tab2 = st.tabs(["👥 Teilgenommen", "📝 Nur angemeldet"])
+col1, col2 = st.columns(2)
 
-unternehmen_kategorien = [
-    ("Unternehmen 1-9 Mitarbeiter", "Kleinstunternehmen"),
-    ("Unternehmen 10-49 Mitarbeiter", "Kleine Unternehmen"),
-    ("Unternehmen 50-249 Mitarbeiter", "Mittlere Unternehmen"),
-    ("Unternehmen bis 500 Mitarbeiter", "Größere Unternehmen"),
-    ("Unternehmen ueber 500 Mitarbeiter", "Großunternehmen"),
-]
+with col1:
+    st.write("**Teilgenommen:**")
 
-institution_icons = {
-    "Kammer": "⚖️",
-    "Verband/Verein": "🤝",
-    "Wirtschaftsförderung": "📈",
-    "Hochschule/Bildungseinrichtung": "🎓",
-    "Mittelstand-Digital": "💻",
-    "Förderinitiative": "🚀",
-    "Unklar": "❓",
-}
+    # Unternehmen nach Größe
+    st.write("**Unternehmen:**")
+    unternehmen_kategorien = [
+        "Unternehmen 1-9 Mitarbeiter",
+        "Unternehmen 10-49 Mitarbeiter",
+        "Unternehmen 50-249 Mitarbeiter",
+        "Unternehmen bis 500 Mitarbeiter",
+        "Unternehmen ueber 500 Mitarbeiter",
+    ]
 
-with tab1:
-    st.write("### 🏢 Unternehmen")
-    
-    # Container für Unternehmen
-    with st.container():
-        for kategorie, display_name in unternehmen_kategorien:
-            kategorie_teilgenommen = teilgenommen_df[teilgenommen_df["Kategorie"] == kategorie]
-            anzahl_personen = personen(kategorie_teilgenommen)
-            anzahl_unternehmen = unternehmen(kategorie_teilgenommen)
-            if anzahl_personen > 0:
-                with st.container():
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    with col1:
-                        st.write(f"**{display_name}**")
-                    with col2:
-                        st.metric("👤 Personen", anzahl_personen)
-                    with col3:
-                        st.metric("🏢 Unternehmen", anzahl_unternehmen)
+    for kategorie in unternehmen_kategorien:
+        kategorie_teilgenommen = teilgenommen_df[
+            teilgenommen_df["Kategorie"] == kategorie
+        ]
+        anzahl_personen = personen(kategorie_teilgenommen)
+        anzahl_unternehmen = unternehmen(kategorie_teilgenommen)
+        if anzahl_personen > 0:
+            st.write(
+                f"  • **{kategorie}:** {anzahl_personen} Personen aus {anzahl_unternehmen} Unternehmen"
+            )
 
-    st.write("### 🏛️ Institutionen")
-    
-    # Container für Institutionen mit besserer Struktur
+    st.write("")
+    st.write("**Institutionen:**")
     for inst_type, label in institution_labels.items():
         count_persons = personen(teilgenommen_by_type[inst_type])
         count_institutions = unternehmen(teilgenommen_by_type[inst_type])
         if count_persons > 0:
-            icon = institution_icons.get(label, "🏛️")
-            
-            with st.expander(f"{icon} **{label}** ({count_persons} Personen aus {count_institutions} Institutionen)"):
-                # Detailaufschlüsselung
-                if len(teilgenommen_by_type[inst_type]) > 0:
-                    institution_breakdown = (
-                        teilgenommen_by_type[inst_type]
-                        .groupby("Unternehmen")
-                        .size()
-                        .sort_values(ascending=False)
-                    )
-                    
-                    if len(institution_breakdown) > 1:
-                        st.write("**Aufschlüsselung nach Institutionen:**")
-                        for institution_name, person_count in institution_breakdown.items():
-                            col1, col2 = st.columns([4, 1])
-                            with col1:
-                                st.write(f"• {institution_name}")
-                            with col2:
-                                st.write(f"👤 {person_count}")
-                    else:
-                        st.write(f"Alle Personen von: **{institution_breakdown.index[0]}**")
+            st.write(
+                f"  • **{label}:** {count_persons} Personen aus {count_institutions} Institutionen"
+            )
 
-with tab2:
-    st.write("### 🏢 Unternehmen")
-    
-    # Container für Unternehmen
-    with st.container():
-        for kategorie, display_name in unternehmen_kategorien:
-            kategorie_angemeldet = angemeldet_df[angemeldet_df["Kategorie"] == kategorie]
-            anzahl_personen = personen(kategorie_angemeldet)
-            anzahl_unternehmen = unternehmen(kategorie_angemeldet)
-            if anzahl_personen > 0:
-                with st.container():
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    with col1:
-                        st.write(f"**{display_name}**")
-                    with col2:
-                        st.metric("👤 Personen", anzahl_personen)
-                    with col3:
-                        st.metric("🏢 Unternehmen", anzahl_unternehmen)
+            # Detailaufschlüsselung: Welche Institutionen mit wie vielen Personen
+            if len(teilgenommen_by_type[inst_type]) > 0:
+                institution_breakdown = (
+                    teilgenommen_by_type[inst_type]
+                    .groupby("Unternehmen")
+                    .size()
+                    .sort_values(ascending=False)
+                )
+                if (
+                    len(institution_breakdown) > 1
+                ):  # Nur anzeigen wenn mehr als eine Institution
+                    st.write("     └─ Details:")
+                    for institution_name, person_count in institution_breakdown.items():
+                        st.write(
+                            f"       • {institution_name}: {person_count} Person(en)"
+                        )
 
-    st.write("### 🏛️ Institutionen")
-    
-    # Container für Institutionen
+with col2:
+    st.write("**Nur angemeldet:**")
+
+    # Unternehmen nach Größe
+    st.write("**Unternehmen:**")
+    for kategorie in unternehmen_kategorien:
+        kategorie_angemeldet = angemeldet_df[angemeldet_df["Kategorie"] == kategorie]
+        anzahl_personen = personen(kategorie_angemeldet)
+        anzahl_unternehmen = unternehmen(kategorie_angemeldet)
+        if anzahl_personen > 0:
+            st.write(
+                f"  • **{kategorie}:** {anzahl_personen} Personen aus {anzahl_unternehmen} Unternehmen"
+            )
+
+    st.write("")
+    st.write("**Institutionen:**")
     for inst_type, label in institution_labels.items():
         count_persons = personen(angemeldet_by_type[inst_type])
         count_institutions = unternehmen(angemeldet_by_type[inst_type])
         if count_persons > 0:
-            icon = institution_icons.get(label, "🏛️")
-            
-            with st.expander(f"{icon} **{label}** ({count_persons} Personen aus {count_institutions} Institutionen)"):
-                # Detailaufschlüsselung
-                if len(angemeldet_by_type[inst_type]) > 0:
-                    institution_breakdown = (
-                        angemeldet_by_type[inst_type]
-                        .groupby("Unternehmen")
-                        .size()
-                        .sort_values(ascending=False)
-                    )
-                    
-                    if len(institution_breakdown) > 1:
-                        st.write("**Aufschlüsselung nach Institutionen:**")
-                        for institution_name, person_count in institution_breakdown.items():
-                            col1, col2 = st.columns([4, 1])
-                            with col1:
-                                st.write(f"• {institution_name}")
-                            with col2:
-                                st.write(f"👤 {person_count}")
-                    else:
-                        st.write(f"Alle Personen von: **{institution_breakdown.index[0]}**")
+            st.write(
+                f"  • **{label}:** {count_persons} Personen aus {count_institutions} Institutionen"
+            )
+
+            # Detailaufschlüsselung: Welche Institutionen mit wie vielen Personen
+            if len(angemeldet_by_type[inst_type]) > 0:
+                institution_breakdown = (
+                    angemeldet_by_type[inst_type]
+                    .groupby("Unternehmen")
+                    .size()
+                    .sort_values(ascending=False)
+                )
+                if (
+                    len(institution_breakdown) > 1
+                ):  # Nur anzeigen wenn mehr als eine Institution
+                    st.write("     └─ Details:")
+                    for institution_name, person_count in institution_breakdown.items():
+                        st.write(
+                            f"       • {institution_name}: {person_count} Person(en)"
+                        )
 
 
 # Spezielle Kategorie "Unklar" hervorheben
@@ -1176,83 +1116,32 @@ st.subheader("👥 Mehrere Personen pro Unternehmen/Institution")
 counts_unternehmen = personen_pro_unternehmen(teilgenommen_unternehmen)
 buckets_unternehmen = bucket_auswertung(counts_unternehmen)
 
-with st.container():
-    st.markdown("**🏢 Unternehmen:**")
-    
-    # Buckets als Metrics anzeigen
-    if buckets_unternehmen:
-        col1, col2, col3 = st.columns(3)
-        bucket_keys = list(buckets_unternehmen.keys())
-        
-        if "1 Person" in buckets_unternehmen:
-            with col1:
-                st.metric("1 Person", buckets_unternehmen["1 Person"])
-        
-        if "2 Personen" in buckets_unternehmen:
-            with col2:
-                st.metric("2 Personen", buckets_unternehmen["2 Personen"])
-        
-        if "3+ Personen" in buckets_unternehmen:
-            with col3:
-                st.metric("3+ Personen", buckets_unternehmen["3+ Personen"])
-    
-    # Mehrfach vertretene Unternehmen
-    mehrfach_unternehmen = counts_unternehmen[counts_unternehmen > 1]
-    
-    if not mehrfach_unternehmen.empty:
-        with st.expander("📋 Unternehmen mit mehreren teilnehmenden Personen"):
-            st.dataframe(
-                mehrfach_unternehmen.rename("Anzahl Personen"),
-                use_container_width=True,
-                column_config={
-                    "Anzahl Personen": st.column_config.NumberColumn(
-                        "Anzahl Personen", 
-                        help="Anzahl der teilnehmenden Personen aus diesem Unternehmen"
-                    )
-                }
-            )
-    else:
-        st.success("✅ Alle Unternehmen waren nur mit einer Person vertreten.")
+st.write("**Unternehmen:**")
+for k, v in buckets_unternehmen.items():
+    st.write(f"**{k}:** {v}")
+
+mehrfach_unternehmen = counts_unternehmen[counts_unternehmen > 1]
+
+if not mehrfach_unternehmen.empty:
+    st.markdown("**Unternehmen mit mehreren teilnehmenden Personen:**")
+    st.dataframe(mehrfach_unternehmen.rename("Anzahl Personen"))
+else:
+    st.success("✅ Alle Unternehmen waren nur mit einer Person vertreten.")
 
 # Andere Institutionen
 if len(teilgenommen_institutionen) > 0:
     counts_institutionen = personen_pro_unternehmen(teilgenommen_institutionen)
     buckets_institutionen = bucket_auswertung(counts_institutionen)
-    
-    with st.container():
-        st.markdown("**🏛️ Andere Institutionen:**")
-        
-        # Buckets als Metrics anzeigen
-        if buckets_institutionen:
-            col1, col2, col3 = st.columns(3)
-            
-            if "1 Person" in buckets_institutionen:
-                with col1:
-                    st.metric("1 Person", buckets_institutionen["1 Person"])
-            
-            if "2 Personen" in buckets_institutionen:
-                with col2:
-                    st.metric("2 Personen", buckets_institutionen["2 Personen"])
-            
-            if "3+ Personen" in buckets_institutionen:
-                with col3:
-                    st.metric("3+ Personen", buckets_institutionen["3+ Personen"])
-        
-        # Mehrfach vertretene Institutionen
-        mehrfach_institutionen = counts_institutionen[counts_institutionen > 1]
-        
-        if not mehrfach_institutionen.empty:
-            with st.expander("📋 Institutionen mit mehreren teilnehmenden Personen"):
-                st.dataframe(
-                    mehrfach_institutionen.rename("Anzahl Personen"),
-                    use_container_width=True,
-                    column_config={
-                        "Anzahl Personen": st.column_config.NumberColumn(
-                            "Anzahl Personen", 
-                            help="Anzahl der teilnehmenden Personen aus dieser Institution"
-                        )
-                    }
-                )
+
+    st.write("**Andere Institutionen:**")
+    for k, v in buckets_institutionen.items():
+        st.write(f"**{k}:** {v}")
+
+    mehrfach_institutionen = counts_institutionen[counts_institutionen > 1]
+
+    if not mehrfach_institutionen.empty:
+        st.markdown("**Andere Institutionen mit mehreren teilnehmenden Personen:**")
+        st.dataframe(mehrfach_institutionen.rename("Anzahl Personen"))
 
 # ==============================
 # FIRMENGRÖSSE-AUSWERTUNG
@@ -1320,9 +1209,40 @@ st.text_area("Automatisch generierter Text", text, height=120)
 # Besucherkennzahlen-Abschnitt wurde nach oben verschoben
 
 
-# Firmengröße-Mapping erfolgt über die Kategorie-Spalte
+def map_company_size_to_category(size_str):
+    """Mappt Firmengröße zu den gewünschten Kategorien"""
+    if pd.isna(size_str):
+        return "Unbekannt"
 
-# Duplikat entfernt - Aggregierte Summen sind bereits weiter oben berechnet
+    size_str = str(size_str).strip().lower()
+
+    if "1 bis 9" in size_str or "1-9" in size_str:
+        return "Kleinstunternehmen (1 - 9)"
+    elif "10 bis 49" in size_str or "10-49" in size_str:
+        return "Kleine Unternehmen (10 - 49)"
+    elif "50 bis 249" in size_str or "50-249" in size_str:
+        return "Mittlere Unternehmen (50 - 249)"
+    elif "bis 500" in size_str or "250-500" in size_str:
+        return "Größere Unternehmen (250 - 500)"
+    elif "mehr als 500" in size_str or "500+" in size_str or "> 500" in size_str:
+        return "Großunternehmen (> 500)"
+    else:
+        return "Unbekannt"
+
+
+# Funktion wurde nach oben verschoben - Duplikat entfernt
+
+# Aggregierte Zahlen berechnen und anzeigen
+total_angemeldet_personen = stats_df["Anzahl angemeldeter Personen"].sum()
+total_teilgenommen_personen = stats_df["Anzahl teilnehmender/erreichter Personen"].sum()
+total_angemeldet_organisationen = stats_df[
+    "Anzahl angemeldeter Unternehmen/Institutionen"
+].sum()
+total_teilgenommen_organisationen = stats_df[
+    "Anzahl teilnehmender/erreichter Unternehmen/Institutionen"
+].sum()
+
+# Duplikat entfernt - Aggregierte Summen sind bereits weiter oben
 
 # Zusätzliche Detailanalyse für gemischte Teilnahme
 st.write("---")
@@ -1399,7 +1319,7 @@ st.download_button(
     data=visitor_stats_csv,
     file_name=f"MDZ_Besucherkennzahlen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
     mime="text/csv",
-    key="download_visitor_stats"
+    key="download_visitor_stats",
 )
 
 # ==============================
@@ -1419,7 +1339,7 @@ with col1:
         data=csv_data,
         file_name=f"MDZ_Teilnehmer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
-        key="download_csv_data"
+        key="download_csv_data",
     )
 
 # Excel Export mit mehreren Sheets
@@ -1511,7 +1431,7 @@ with col2:
         data=excel_data,
         file_name=f"MDZ_Auswertung_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_excel_data"
+        key="download_excel_data",
     )
 
 # JSON Export für maschinelle Weiterverarbeitung
@@ -1550,7 +1470,7 @@ with col3:
         data=json_string,
         file_name=f"MDZ_Daten_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
         mime="application/json",
-        key="download_json_data"
+        key="download_json_data",
     )
 
 # Textbaustein als separate Datei
@@ -1561,7 +1481,7 @@ st.download_button(
     data=text,
     file_name=f"MDZ_Textbaustein_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
     mime="text/plain",
-    key="download_text_data"
+    key="download_text_data",
 )
 
 # ==============================
@@ -1569,4 +1489,6 @@ st.download_button(
 # ==============================
 
 st.write("---")
-st.write(f"**Debug**: {len(processed_df)} Zeilen nach Bereinigung, Spalten: {list(processed_df.columns)}")
+st.write(
+    f"**Debug**: {len(processed_df)} Zeilen nach Bereinigung, Spalten: {list(processed_df.columns)}"
+)
